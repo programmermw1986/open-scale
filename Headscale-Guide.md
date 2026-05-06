@@ -7,7 +7,8 @@
 - [3. 域名绑定与 HTTPS](#3-域名绑定与-https)
 - [4. 添加 Node（节点）](#4-添加-node节点)
 - [5. 添加 Route（路由）](#5-添加-route路由)
-- [6. 常用运维命令](#6-常用运维命令)
+- [6. 常见问题](#6-常见问题)
+- [7. 常用运维命令](#7-常用运维命令)
 
 ---
 
@@ -231,6 +232,7 @@ docker exec headscale headscale apikeys create
 每个节点需要关联到一个用户：
 
 ```bash
+# 注意：--user 参数在部分命令中需要用户 ID（数字），不是用户名
 docker exec headscale headscale users create mengwei968@qq.com
 ```
 
@@ -245,25 +247,21 @@ docker exec headscale headscale users list
 使用预认证 key（pre-auth key）可以简化节点加入流程：
 
 ```bash
-docker exec headscale headscale preauthkeys create --user mengwei968@qq.com
-```
+# 注意：--user 参数需要用户 ID（数字），不是用户名
+# 先查看用户 ID
+docker exec headscale headscale users list
 
-生成的 key 是一次性的，节点使用后即失效。如需可重复使用的 key：
+# 生成一次性 key（-u 后跟用户 ID）
+docker exec headscale headscale preauthkeys create -u <user-id>
 
-```bash
-docker exec headscale headscale preauthkeys create --user mengwei968@qq.com --reusable
-```
+# 生成可重复使用的 key
+docker exec headscale headscale preauthkeys create -u <user-id> --reusable
 
-设置过期时间：
+# 设置过期时间
+docker exec headscale headscale preauthkeys create -u <user-id> --expiration 24h
 
-```bash
-docker exec headscale headscale preauthkeys create --user mengwei968@qq.com --expiration 24h
-```
-
-查看已有 key：
-
-```bash
-docker exec headscale headscale preauthkeys list --user mengwei968@qq.com
+# 查看已有 key
+docker exec headscale headscale preauthkeys list -u <user-id>
 ```
 
 ### 4.3 在客户端节点上加入网络
@@ -308,11 +306,11 @@ tailscale up --login-server https://headscale.hello-gpt.cn
 命令会输出一个 URL，将该 URL 中的 `https://controlplane.tailscale.com` 替换为 `https://headscale.hello-gpt.cn`，在浏览器中打开完成认证。或者在服务端手动批准：
 
 ```bash
-# 查看待批准节点
+# 查看待注册节点
 docker exec headscale headscale nodes list
 
-# 批准节点（按 node ID）
-docker exec headscale headscale nodes approve --id <node-id>
+# 注册节点（按 node ID）
+docker exec headscale headscale nodes register --id <node-id>
 ```
 
 ### 4.4 查看已加入的节点
@@ -359,14 +357,17 @@ tailscale up --login-server https://headscale.hello-gpt.cn --advertise-routes=19
 节点广播路由后，需要在 Headscale 服务端批准：
 
 ```bash
-# 查看节点广播的路由
-docker exec headscale headscale routes list
+# 查看所有节点的路由（Approved=已批准，Available=节点广播的，Serving=生效的）
+docker exec headscale headscale nodes list-routes
 
-# 批准路由（按 route ID）
-docker exec headscale headscale routes enable --route <route-id>
+# 批准路由（需指定节点 ID 和路由 CIDR）
+docker exec headscale headscale nodes approve-routes -i <node-id> -r 10.0.0.0/16
 
-# 或者批准某节点的所有路由
-docker exec headscale headscale routes enable --identifier <node-id>
+# 批准多个路由
+docker exec headscale headscale nodes approve-routes -i <node-id> -r 10.0.0.0/16,192.168.1.0/24
+
+# 移除已批准的路由（传空字符串）
+docker exec headscale headscale nodes approve-routes -i <node-id> -r ""
 ```
 
 ### 5.3 在其他节点上使用路由
@@ -394,8 +395,11 @@ tailscale up --login-server https://headscale.hello-gpt.cn --advertise-exit-node
 #### 在服务端批准 Exit Node
 
 ```bash
-docker exec headscale headscale routes list
-docker exec headscale headscale routes enable --route <exit-node-route-id>
+# 查看路由
+docker exec headscale headscale nodes list-routes
+
+# 批准 Exit Node（0.0.0.0/0 和 ::/0 表示全部流量走该节点）
+docker exec headscale headscale nodes approve-routes -i <node-id> -r 0.0.0.0/0,::/0
 ```
 
 #### 通过 Exit Node 路由流量
@@ -413,22 +417,51 @@ tailscale up --exit-node=
 ### 5.5 查看路由状态
 
 ```bash
-# 列出所有路由
-docker exec headscale headscale routes list
+# 列出所有节点的路由
+docker exec headscale headscale nodes list-routes
 
 # 列出某个节点的路由
-docker exec headscale headscale routes list --identifier <node-id>
+docker exec headscale headscale nodes list-routes -i <node-id>
 ```
 
 ### 5.6 禁用路由
 
 ```bash
-docker exec headscale headscale routes disable --route <route-id>
+# 移除节点的已批准路由（传空字符串即移除所有）
+docker exec headscale headscale nodes approve-routes -i <node-id> -r ""
 ```
 
 ---
 
-## 6. 常用运维命令
+## 6. 常见问题
+
+### Q: `--user` 参数报错 `strconv.ParseUint: parsing "xxx": invalid syntax`
+
+Headscale 的 `--user` / `-u` 参数在部分命令（如 `preauthkeys create`、`preauthkeys list`）中要求传入**用户 ID（数字）**，而不是用户名。
+
+**错误示例：**
+```bash
+docker exec headscale headscale preauthkeys create --user mengwei968@qq.com
+# Error: invalid argument "mengwei968@qq.com" for "-u, --user" flag: strconv.ParseUint
+```
+
+**正确做法：** 先通过 `users list` 查看用户 ID，再用数字 ID 执行命令：
+
+```bash
+# 查看用户列表，获取 ID
+docker exec headscale headscale users list
+# ID | Name               | ...
+# 3  | mengwei968@qq.com  | ...
+
+# 使用数字 ID
+docker exec headscale headscale preauthkeys create -u 3
+```
+
+> **注意**：`users create` 和 `users delete` 命令支持用户名，但 `preauthkeys` 系列命令的 `--user` 只接受数字 ID。
+
+---
+
+## 7. 常用运维命令
 
 ### 服务管理
 
@@ -478,8 +511,8 @@ docker exec headscale headscale apikeys expire --prefix <key-prefix>
 # 列出所有节点
 docker exec headscale headscale nodes list
 
-# 批准节点
-docker exec headscale headscale nodes approve --id <node-id>
+# 注册节点
+docker exec headscale headscale nodes register --id <node-id>
 
 # 删除节点
 docker exec headscale headscale nodes delete --id <node-id>
@@ -494,14 +527,14 @@ docker exec headscale headscale nodes view --id <node-id>
 ### 路由管理
 
 ```bash
-# 列出所有路由
-docker exec headscale headscale routes list
+# 列出所有节点的路由
+docker exec headscale headscale nodes list-routes
 
-# 启用路由
-docker exec headscale headscale routes enable --route <route-id>
+# 批准路由
+docker exec headscale headscale nodes approve-routes -i <node-id> -r 10.0.0.0/16
 
-# 禁用路由
-docker exec headscale headscale routes disable --route <route-id>
+# 移除已批准的路由
+docker exec headscale headscale nodes approve-routes -i <node-id> -r ""
 ```
 
 ### 配置文件
